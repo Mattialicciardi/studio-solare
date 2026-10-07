@@ -1,36 +1,40 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Studio Solare
 
-## Getting Started
+Applicazione locale-first per stimare la convenienza di un impianto fotovoltaico.
 
-First, run the development server:
+## Cosa fa
+
+- Preventivo, pagamento immediato o finanziamento, detrazione 50% su 10 anni.
+- Inserimento manuale delle bollette e import CSV/XLSX.
+- Import PDF assistito: estrae consumo e totale quando riconoscibili; date e valori restano modificabili e devono essere verificati.
+- Geocodifica della località.
+- Produzione fotovoltaica stimata con PVGIS in base a potenza, inclinazione, azimut e perdite.
+- Risparmio annuo basato sul costo medio delle bollette, quota di autoconsumo e valore dell'energia immessa.
+- Correlazione di Pearson tra consumo giornaliero delle bollette e temperatura, irradiazione e pioggia del medesimo periodo.
+- Dati del progetto e delle bollette salvati esclusivamente in `localStorage` del browser.
+
+## Avvio locale
 
 ```bash
+npm install
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Apri `http://localhost:3000`.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Verifiche
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+```bash
+npm test
+npm run lint
+npm run build
+```
 
-## Learn More
+## Fonti runtime
 
-To learn more about Next.js, take a look at the following resources:
+- PVGIS per la simulazione di produzione.
+- Open-Meteo per geocodifica e archivio meteo giornaliero.
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+## Limiti del modello
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+Questa app è una stima orientativa, non una perizia energetica, fiscale o finanziaria. La batteria è raccolta come parametro di progetto, mentre la quota di autoconsumo è impostata esplicitamente perché una simulazione rigorosa richiederebbe dati di consumo orari e una curva di carico. Verifica sempre requisiti fiscali, capienza IRPEF, tariffe, ombreggiamenti e condizioni contrattuali con professionisti qualificati.
