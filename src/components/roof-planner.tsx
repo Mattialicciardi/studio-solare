@@ -28,6 +28,7 @@ export function RoofPlanner({ tilt, usableRoofPct, panelDensityWpM2, onApply }: 
   const [fall, setFall] = useState<Pair>({});
   const [roof, setRoof] = useState<MapPoint[]>([]);
   const [scaleMeters, setScaleMeters] = useState(10);
+  const [scaleMetersDraft, setScaleMetersDraft] = useState("10");
 
   const estimate = useMemo(() => deriveRoofEstimate({
     scaleStart: scale.start,
@@ -79,7 +80,7 @@ export function RoofPlanner({ tilt, usableRoofPct, panelDensityWpM2, onApply }: 
     </div>
     <div className="grid gap-3 sm:grid-cols-2">
       <div><Label htmlFor="roof-screenshot">Screenshot mappa o planimetria</Label><Input id="roof-screenshot" aria-label="Screenshot mappa o planimetria" className="mt-1" type="file" accept="image/png,image/jpeg,image/webp,image/svg+xml" onChange={handleImage} /></div>
-      <div><Label htmlFor="scale-meters">Metri indicati dalla barra di scala</Label><Input id="scale-meters" className="mt-1" min="0.1" step="0.1" type="number" value={scaleMeters} onChange={(event) => setScaleMeters(Math.max(0, Number(event.target.value) || 0))} /></div>
+      <div><Label htmlFor="scale-meters">Metri indicati dalla barra di scala</Label><Input id="scale-meters" className="mt-1" min="0.1" step="0.1" type="number" inputMode="decimal" value={scaleMetersDraft} onChange={(event) => { const next = event.target.value; setScaleMetersDraft(next); if (/^\d+(?:[.,]\d+)?$/.test(next)) setScaleMeters(Math.max(0, Number(next.replace(",", ".")))); }} onBlur={(event) => { const normalized = event.target.value.trim().replace(",", "."); if (!normalized) { setScaleMeters(0); return; } if (!Number.isFinite(Number(normalized))) setScaleMetersDraft(String(scaleMeters)); }} onKeyDown={(event) => { if (event.key === "Enter") event.currentTarget.blur(); }} /></div>
     </div>
     {image && <>
       <div className="flex flex-wrap gap-2">
