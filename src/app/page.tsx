@@ -1,9 +1,9 @@
+/* eslint-disable react-hooks/static-components -- NumberInput is stateless and intentionally closes over this form's state. */
 "use client";
 
 import { ChangeEvent, useEffect, useMemo, useState } from "react";
-import { FileDown, FileSpreadsheet, MapPin, RefreshCw, Sun, Trash2, Upload } from "lucide-react";
+import { FileDown, Moon, RefreshCw, Sun, Trash2, Upload } from "lucide-react";
 import readXlsxFile from "read-excel-file/browser";
-
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -12,195 +12,143 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import {
-  buildInvestmentSummary,
-  correlationLabel,
-  formatCurrency,
-  formatNumber,
-  summarizeBills,
-  type BillRecord,
-} from "@/lib/analysis";
+import { buildInvestmentSummary, correlationLabel, formatCurrency, formatNumber, simulateHourlyAutoconsumption, summarizeBills, type BillRecord, type HourlyEnergyRecord } from "@/lib/analysis";
 import { correlateBillsWithWeather, type WeatherDay } from "@/lib/weather";
 
 type Project = {
-  locationName: string;
-  latitude: number | null;
-  longitude: number | null;
-  quoteAmount: number;
-  useTaxCredit: boolean;
-  paymentMethod: "upfront" | "financed";
-  monthlyPayment: number;
-  installments: number;
-  systemKwp: number;
-  batteryKwh: number;
-  tilt: number;
-  aspect: number;
-  lossesPct: number;
-  selfConsumptionPct: number;
-  exportPrice: number;
-  bills: BillRecord[];
+  locationName: string; latitude: number | null; longitude: number | null;
+  quoteAmount: number; useTaxCredit: boolean; paymentMethod: "upfront" | "financed";
+  downPayment: number; monthlyPayment: number; installments: number; tanPct: number; taegPct: number;
+  systemKwp: number; batteryKwh: number; tilt: number; aspect: number; lossesPct: number; shadePct: number;
+  selfConsumptionPct: number; exportPrice: number; degradationPct: number; maintenanceAnnual: number; insuranceAnnual: number;
+  bills: BillRecord[]; hourlyLoad: HourlyEnergyRecord[];
 };
-
 type SolarResult = { annualKwh: number; monthly: Array<{ month: number; kwh: number }> };
-const storageKey = "solare-studio-v1";
+type HourlySolarResult = { year: number; hours: HourlyEnergyRecord[] };
+const storageKey = "solare-studio-v2";
 const today = new Date().toISOString().slice(0, 10);
 const defaultProject: Project = {
-  locationName: "",
-  latitude: null,
-  longitude: null,
-  quoteAmount: 12000,
-  useTaxCredit: true,
-  paymentMethod: "upfront",
-  monthlyPayment: 0,
-  installments: 120,
-  systemKwp: 6,
-  batteryKwh: 0,
-  tilt: 30,
-  aspect: 0,
-  lossesPct: 14,
-  selfConsumptionPct: 55,
-  exportPrice: 0.1,
-  bills: [],
+  locationName: "", latitude: null, longitude: null, quoteAmount: 12_000, useTaxCredit: true, paymentMethod: "upfront",
+  downPayment: 0, monthlyPayment: 0, installments: 120, tanPct: 0, taegPct: 0,
+  systemKwp: 6, batteryKwh: 0, tilt: 30, aspect: 0, lossesPct: 14, shadePct: 0, selfConsumptionPct: 55, exportPrice: 0.1,
+  degradationPct: 0.5, maintenanceAnnual: 120, insuranceAnnual: 0, bills: [], hourlyLoad: [],
 };
-
 const numberValue = (value: string) => Number(value.replace(",", ".")) || 0;
-const inputDate = (value: unknown) => {
-  if (value instanceof Date) return value.toISOString().slice(0, 10);
-  const stringValue = String(value ?? "").trim();
-  if (/^\d{4}-\d{2}-\d{2}$/.test(stringValue)) return stringValue;
-  const match = stringValue.match(/(\d{1,2})[/-](\d{1,2})[/-](\d{2,4})/);
-  if (!match) return "";
-  const year = match[3].length === 2 ? `20${match[3]}` : match[3];
-  return `${year}-${match[2].padStart(2, "0")}-${match[1].padStart(2, "0")}`;
-};
 const field = (row: Record<string, unknown>, terms: string[]) => {
   const key = Object.keys(row).find((candidate) => terms.some((term) => candidate.toLowerCase().includes(term)));
   return key ? row[key] : undefined;
 };
+const inputDate = (value: unknown) => {
+  if (value instanceof Date) return value.toISOString().slice(0, 10);
+  const raw = String(value ?? "").trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw;
+  const match = raw.match(/(\d{1,2})[/-](\d{1,2})[/-](\d{2,4})/);
+  return match ? `${match[3].length === 2 ? `20${match[3]}` : match[3]}-${match[2].padStart(2, "0")}-${match[1].padStart(2, "0")}` : "";
+};
+const parseTimestamp = (value: unknown) => {
+  if (value instanceof Date) return value.toISOString();
+  const date = new Date(String(value ?? "").trim().replace(" ", "T"));
+  return Number.isNaN(date.getTime()) ? "" : date.toISOString();
+};
 const csvRows = (text: string): Record<string, unknown>[] => {
-  const lines = text.trim().split(/\r?\n/).filter(Boolean);
-  if (lines.length < 2) return [];
+  const lines = text.trim().split(/\r?\n/).filter(Boolean); if (lines.length < 2) return [];
   const delimiter = lines[0].includes(";") ? ";" : ",";
-  const headers = lines[0].split(delimiter).map((header) => header.trim().replace(/^"|"$/g, ""));
+  const headers = lines[0].split(delimiter).map((item) => item.trim().replace(/^"|"$/g, ""));
   return lines.slice(1).map((line) => Object.fromEntries(headers.map((header, index) => [header, line.split(delimiter)[index]?.trim().replace(/^"|"$/g, "") ?? ""])));
 };
 
 export default function Home() {
   const [project, setProject] = useState<Project>(defaultProject);
   const [hydrated, setHydrated] = useState(false);
+  const [dark, setDark] = useState(false);
+  const [activeTab, setActiveTab] = useState("progetto");
   const [locationQuery, setLocationQuery] = useState("");
   const [solar, setSolar] = useState<SolarResult | null>(null);
+  const [hourlySolar, setHourlySolar] = useState<HourlySolarResult | null>(null);
   const [weather, setWeather] = useState<WeatherDay[]>([]);
-  const [busy, setBusy] = useState<"location" | "solar" | "weather" | "import" | null>(null);
+  const [busy, setBusy] = useState<"location" | "solar" | "hourly" | "weather" | "bills" | "profile" | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const update = <K extends keyof Project>(key: K, value: Project[K]) => setProject((current) => ({ ...current, [key]: value }));
+  const updateNumber = (key: keyof Project, value: string) => update(key, numberValue(value) as never);
 
   useEffect(() => {
-    const saved = window.localStorage.getItem(storageKey);
-    queueMicrotask(() => {
-      if (saved) {
-        try { setProject({ ...defaultProject, ...JSON.parse(saved) }); } catch { window.localStorage.removeItem(storageKey); }
-      }
-      setHydrated(true);
-    });
+    const saved = window.localStorage.getItem(storageKey) ?? window.localStorage.getItem("solare-studio-v1");
+    queueMicrotask(() => { if (saved) { try { setProject({ ...defaultProject, ...JSON.parse(saved) }); } catch { window.localStorage.removeItem(storageKey); } } setDark(window.matchMedia("(prefers-color-scheme: dark)").matches); setHydrated(true); });
   }, []);
   useEffect(() => { if (hydrated) window.localStorage.setItem(storageKey, JSON.stringify(project)); }, [project, hydrated]);
 
   const summary = useMemo(() => summarizeBills(project.bills), [project.bills]);
   const correlation = useMemo(() => correlateBillsWithWeather(project.bills, weather), [project.bills, weather]);
-  const annualProduction = solar?.annualKwh ?? 0;
-  const selfConsumed = annualProduction * (project.selfConsumptionPct / 100);
-  const exported = annualProduction - selfConsumed;
-  const annualSavings = selfConsumed * summary.averageEnergyCostPerKwh + exported * project.exportPrice;
-  const investment = useMemo(() => buildInvestmentSummary({
-    quoteAmount: project.quoteAmount, useTaxCredit: project.useTaxCredit, paymentMethod: project.paymentMethod,
-    monthlyPayment: project.monthlyPayment, installments: project.installments, annualSavings,
-  }), [project, annualSavings]);
-  const update = <K extends keyof Project>(key: K, value: Project[K]) => setProject((current) => ({ ...current, [key]: value }));
+  const hourlyMatch = useMemo(() => hourlySolar && project.hourlyLoad.length ? simulateHourlyAutoconsumption(project.hourlyLoad, hourlySolar.hours, project.batteryKwh) : null, [project.hourlyLoad, hourlySolar, project.batteryKwh]);
+  const annualProduction = (solar?.annualKwh ?? 0) * (1 - project.shadePct / 100);
+  const selfConsumed = hourlyMatch?.selfConsumed ?? annualProduction * project.selfConsumptionPct / 100;
+  const exported = hourlyMatch?.exported ?? Math.max(0, annualProduction - selfConsumed);
+  const annualSavings = selfConsumed * summary.averageVariableEnergyCostPerKwh + exported * project.exportPrice;
+  const investment = useMemo(() => buildInvestmentSummary({ quoteAmount: project.quoteAmount, useTaxCredit: project.useTaxCredit, paymentMethod: project.paymentMethod, downPayment: project.downPayment, monthlyPayment: project.monthlyPayment, installments: project.installments, tanPct: project.tanPct, taegPct: project.taegPct, annualSavings, degradationPct: project.degradationPct, maintenanceAnnual: project.maintenanceAnnual, insuranceAnnual: project.insuranceAnnual }), [project, annualSavings]);
 
   async function geocode() {
-    if (!locationQuery.trim()) return;
-    setBusy("location"); setNotice(null);
-    try {
-      const response = await fetch(`/api/geocode?q=${encodeURIComponent(locationQuery)}`);
-      const data = await response.json(); if (!response.ok) throw new Error(data.error);
-      setProject((current) => ({ ...current, locationName: data.name, latitude: data.latitude, longitude: data.longitude }));
-    } catch (error) { setNotice(error instanceof Error ? error.message : "Località non disponibile."); }
-    finally { setBusy(null); }
+    if (!locationQuery.trim()) return; setBusy("location"); setNotice(null);
+    try { const response = await fetch(`/api/geocode?q=${encodeURIComponent(locationQuery)}`); const data = await response.json(); if (!response.ok) throw new Error(data.error); setProject((current) => ({ ...current, locationName: data.name, latitude: data.latitude, longitude: data.longitude })); }
+    catch (error) { setNotice(error instanceof Error ? error.message : "Località non disponibile."); } finally { setBusy(null); }
   }
   async function runSolar() {
     if (project.latitude === null || project.longitude === null) { setNotice("Prima cerca e conferma la località."); return; }
     setBusy("solar"); setNotice(null);
-    try {
-      const params = new URLSearchParams({ lat: String(project.latitude), lon: String(project.longitude), kwp: String(project.systemKwp), tilt: String(project.tilt), aspect: String(project.aspect), loss: String(project.lossesPct) });
-      const response = await fetch(`/api/solar?${params}`); const data = await response.json(); if (!response.ok) throw new Error(data.error);
-      setSolar(data);
-    } catch (error) { setNotice(error instanceof Error ? error.message : "Simulazione non disponibile."); }
-    finally { setBusy(null); }
+    try { const params = new URLSearchParams({ lat: String(project.latitude), lon: String(project.longitude), kwp: String(project.systemKwp), tilt: String(project.tilt), aspect: String(project.aspect), loss: String(project.lossesPct) }); const response = await fetch(`/api/solar?${params}`); const data = await response.json(); if (!response.ok) throw new Error(data.error); setSolar(data); }
+    catch (error) { setNotice(error instanceof Error ? error.message : "Simulazione non disponibile."); } finally { setBusy(null); }
+  }
+  async function runHourlyProfile() {
+    if (project.latitude === null || project.longitude === null || !project.hourlyLoad.length) { setNotice("Per la simulazione oraria servono località e un file di consumi orari."); return; }
+    setBusy("hourly"); setNotice(null);
+    try { const params = new URLSearchParams({ lat: String(project.latitude), lon: String(project.longitude), kwp: String(project.systemKwp), tilt: String(project.tilt), aspect: String(project.aspect), loss: String(project.lossesPct), year: "2020" }); const response = await fetch(`/api/solar-hourly?${params}`); const data = await response.json(); if (!response.ok) throw new Error(data.error); setHourlySolar(data); }
+    catch (error) { setNotice(error instanceof Error ? error.message : "Profilo orario non disponibile."); } finally { setBusy(null); }
   }
   async function runWeather() {
     if (project.latitude === null || project.longitude === null || project.bills.length < 3) { setNotice("Servono località e almeno tre bollette con periodo di riferimento."); return; }
-    const dates = project.bills.flatMap((bill) => [bill.startDate, bill.endDate]).filter(Boolean).sort();
-    if (!dates.length) return;
+    const dates = project.bills.flatMap((bill) => [bill.startDate, bill.endDate]).filter(Boolean).sort(); if (!dates.length) return;
     setBusy("weather"); setNotice(null);
-    try {
-      const params = new URLSearchParams({ lat: String(project.latitude), lon: String(project.longitude), start: dates[0], end: dates[dates.length - 1] });
-      const response = await fetch(`/api/weather?${params}`); const data = await response.json(); if (!response.ok) throw new Error(data.error);
-      setWeather(data.days);
-    } catch (error) { setNotice(error instanceof Error ? error.message : "Analisi meteo non disponibile."); }
-    finally { setBusy(null); }
+    try { const response = await fetch(`/api/weather?${new URLSearchParams({ lat: String(project.latitude), lon: String(project.longitude), start: dates[0], end: dates.at(-1) ?? dates[0] })}`); const data = await response.json(); if (!response.ok) throw new Error(data.error); setWeather(data.days); }
+    catch (error) { setNotice(error instanceof Error ? error.message : "Analisi meteo non disponibile."); } finally { setBusy(null); }
   }
-  function addBill() { update("bills", [...project.bills, { id: crypto.randomUUID(), startDate: today.slice(0, 8) + "01", endDate: today, consumptionKwh: 0, totalAmount: 0, source: "manual" }]); }
-  function editBill(id: string, key: keyof BillRecord, value: string) {
-    update("bills", project.bills.map((bill) => ({ ...bill, ...(bill.id === id ? { [key]: key === "consumptionKwh" || key === "totalAmount" ? numberValue(value) : value } : {}) })));
-  }
+  function addBill() { update("bills", [...project.bills, { id: crypto.randomUUID(), startDate: `${today.slice(0, 8)}01`, endDate: today, consumptionKwh: 0, totalAmount: 0, energyAmount: 0, fixedAmount: 0, source: "manual" }]); }
+  function editBill(id: string, key: keyof BillRecord, value: string) { const numeric = ["consumptionKwh", "totalAmount", "energyAmount", "fixedAmount"].includes(key); update("bills", project.bills.map((bill) => bill.id === id ? { ...bill, [key]: numeric ? numberValue(value) : value } : bill)); }
   function removeBill(id: string) { update("bills", project.bills.filter((bill) => bill.id !== id)); }
+  async function readRows(file: File) { if (file.name.toLowerCase().endsWith(".csv")) return csvRows(await file.text()); const [sheet] = await readXlsxFile(file); const [headers = [], ...body] = sheet?.data ?? []; return body.map((row) => Object.fromEntries(headers.map((header: unknown, index) => [String(header ?? "").trim(), row[index] ?? ""]))); }
+  async function importBills(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0]; if (!file) return; setBusy("bills"); setNotice(null);
+    try {
+      let rows: Record<string, unknown>[];
+      if (file.name.toLowerCase().endsWith(".pdf")) { const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs"); const document = await pdfjs.getDocument({ data: new Uint8Array(await file.arrayBuffer()) }).promise; let text = ""; for (let page = 1; page <= document.numPages; page += 1) { const content = await (await document.getPage(page)).getTextContent(); text += ` ${content.items.map((item) => ("str" in item ? item.str : "")).join(" ")}`; } rows = [{ consumo_kwh: text.match(/(\d{1,5}(?:[.,]\d{1,2})?)\s*kWh/i)?.[1], totale_euro: text.match(/(?:totale\s+da\s+pagare|importo\s+totale|totale)\D{0,20}(\d{1,5}(?:[.,]\d{2})?)/i)?.[1] }]; setNotice("PDF letto in modo assistito: verifica tutte le righe, in particolare date e quota energia."); } else rows = await readRows(file);
+      const bills = rows.map((row) => ({ id: crypto.randomUUID(), startDate: inputDate(field(row, ["inizio", "start", "dal"])), endDate: inputDate(field(row, ["fine", "end", "al"])), consumptionKwh: numberValue(String(field(row, ["kwh", "consumo"]) ?? "0")), totalAmount: numberValue(String(field(row, ["totale", "importo", "euro", "costo"]) ?? "0")), energyAmount: numberValue(String(field(row, ["quota energia", "spesa energia", "energy amount", "energia euro"]) ?? "0")), fixedAmount: numberValue(String(field(row, ["costi fissi", "quota fissa", "fixed"]) ?? "0")), source: file.name.toLowerCase().endsWith(".pdf") ? "pdf" as const : "csv" as const })).filter((bill) => bill.consumptionKwh > 0 || bill.totalAmount > 0);
+      if (!bills.length) throw new Error("Nessuna riga importabile: usa colonne con consumo/kWh e totale/importo."); update("bills", [...project.bills, ...bills]);
+    } catch (error) { setNotice(error instanceof Error ? error.message : "Importazione non riuscita."); } finally { event.target.value = ""; setBusy(null); }
+  }
+  async function importHourlyLoad(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0]; if (!file) return; setBusy("profile"); setNotice(null);
+    try { if (!/\.(csv|xlsx|xls)$/i.test(file.name)) throw new Error("Il profilo orario deve essere un CSV o XLSX."); const records = (await readRows(file)).map((row) => ({ timestamp: parseTimestamp(field(row, ["timestamp", "data ora", "date time", "datetime", "ora"])), kwh: numberValue(String(field(row, ["kwh", "consumo", "energia", "energy"]) ?? "0")) })).filter((record) => record.timestamp && record.kwh >= 0).slice(0, 10_000); if (records.length < 24) throw new Error("Servono almeno 24 righe con data/ora e consumo in kWh."); update("hourlyLoad", records); setHourlySolar(null); setNotice(`${formatNumber(records.length, 0)} letture orarie importate. Il confronto usa un anno meteorologico PVGIS di riferimento.`); }
+    catch (error) { setNotice(error instanceof Error ? error.message : "Importazione del profilo non riuscita."); } finally { event.target.value = ""; setBusy(null); }
+  }
   function exportPdf() {
-    const report = window.open("", "_blank", "noopener,noreferrer");
-    if (!report) { setNotice("Il browser ha bloccato la finestra di stampa. Consenti i popup e riprova."); return; }
-    const escape = (value: string) => value.replace(/[&<>\"']/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#039;" })[character] ?? character);
-    const correlationRow = (label: string, value: number | null) => `<tr><td>${label}</td><td>${value === null ? "Dati insufficienti" : `${value.toFixed(2)} · ${correlationLabel(value)}`}</td></tr>`;
-    report.document.write(`<!doctype html><html lang="it"><head><title>Studio Solare — Analisi</title><style>body{font:14px Arial;color:#1c1917;margin:38px}h1{font-size:30px;margin:0}h2{font-size:17px;margin:28px 0 10px;border-bottom:1px solid #d6d3d1;padding-bottom:8px}.sub{color:#57534e;margin:8px 0 24px}.grid{display:grid;grid-template-columns:repeat(2,1fr);gap:12px}.card{border:1px solid #d6d3d1;border-radius:8px;padding:14px}.label{color:#78716c;font-size:11px;text-transform:uppercase;letter-spacing:.08em}.value{font-weight:bold;font-size:20px;margin-top:6px}table{width:100%;border-collapse:collapse}td,th{border-bottom:1px solid #e7e5e4;padding:8px;text-align:left}footer{margin-top:30px;color:#78716c;font-size:10px;line-height:1.5}@media print{body{margin:20px}}</style></head><body><h1>Studio Solare</h1><p class="sub">Analisi generata il ${new Date().toLocaleDateString("it-IT")} · ${escape(project.locationName || "Località non impostata")}</p><h2>Sintesi</h2><div class="grid"><div class="card"><div class="label">Consumo medio</div><div class="value">${formatNumber(summary.averageMonthlyConsumptionKwh)} kWh/mese</div></div><div class="card"><div class="label">Produzione simulata</div><div class="value">${solar ? `${formatNumber(annualProduction)} kWh/anno` : "Non calcolata"}</div></div><div class="card"><div class="label">Risparmio annuo stimato</div><div class="value">${formatCurrency(annualSavings)}</div></div><div class="card"><div class="label">Rientro semplice</div><div class="value">${investment.simplePaybackYears ? `${formatNumber(investment.simplePaybackYears)} anni` : "Dati mancanti"}</div></div></div><h2>Impianto e investimento</h2><table><tr><td>Potenza / batteria</td><td>${formatNumber(project.systemKwp)} kWp / ${formatNumber(project.batteryKwh)} kWh</td></tr><tr><td>Preventivo</td><td>${formatCurrency(project.quoteAmount)}</td></tr><tr><td>Costo netto dopo credito</td><td>${formatCurrency(investment.netCostAfterTaxCredit)}</td></tr><tr><td>Credito annuo simulato</td><td>${formatCurrency(investment.annualTaxCredit)}</td></tr></table><h2>Bollette</h2><table><tr><th>Periodo</th><th>Consumo</th><th>Totale</th></tr>${project.bills.map((bill) => `<tr><td>${escape(bill.startDate)} — ${escape(bill.endDate)}</td><td>${formatNumber(bill.consumptionKwh)} kWh</td><td>${formatCurrency(bill.totalAmount)}</td></tr>`).join("") || "<tr><td colspan=3>Nessuna bolletta inserita</td></tr>"}</table><h2>Correlazione meteo</h2><table>${correlationRow("Temperatura", correlation.temperatureCorrelation)}${correlationRow("Irradiazione", correlation.radiationCorrelation)}${correlationRow("Pioggia", correlation.precipitationCorrelation)}</table><footer>Stima orientativa, non parere tecnico, fiscale o finanziario. Verifica requisiti fiscali, profilo di consumo, ombreggiamenti, tariffe e condizioni contrattuali con professionisti qualificati.</footer><script>window.onload=()=>window.print()<\/script></body></html>`);
+    const report = window.open("", "_blank", "noopener,noreferrer"); if (!report) { setNotice("Il browser ha bloccato la finestra di stampa. Consenti i popup e riprova."); return; }
+    const esc = (value: string) => value.replace(/[&<>\"']/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#039;" })[character] ?? character);
+    // Safe: all user-provided strings are escaped before inclusion in the print-only document.
+    report.document.write(`<!doctype html><html lang="it"><head><title>Studio Solare — Analisi</title><style>body{font:14px Arial;color:#1c1917;margin:38px}h1{font-size:30px;margin:0}h2{font-size:17px;margin:28px 0 10px;border-bottom:1px solid #d6d3d1;padding-bottom:8px}.sub{color:#57534e}.grid{display:grid;grid-template-columns:repeat(2,1fr);gap:12px}.card{border:1px solid #d6d3d1;border-radius:8px;padding:14px}.label{color:#78716c;font-size:11px;text-transform:uppercase}.value{font-weight:bold;font-size:20px;margin-top:6px}table{width:100%;border-collapse:collapse}td,th{border-bottom:1px solid #e7e5e4;padding:8px;text-align:left}footer{margin-top:28px;color:#78716c;font-size:10px}</style></head><body><h1>Studio Solare</h1><p class="sub">${esc(project.locationName || "Località non impostata")} · ${new Date().toLocaleDateString("it-IT")}</p><h2>Sintesi</h2><div class="grid"><div class="card"><div class="label">Produzione</div><div class="value">${solar ? `${formatNumber(annualProduction)} kWh/anno` : "Non calcolata"}</div></div><div class="card"><div class="label">Risparmio annuo</div><div class="value">${formatCurrency(annualSavings)}</div></div><div class="card"><div class="label">Rientro dinamico</div><div class="value">${investment.dynamicPaybackYears ? `${formatNumber(investment.dynamicPaybackYears)} anni` : "Oltre 25 anni"}</div></div><div class="card"><div class="label">Costo netto</div><div class="value">${formatCurrency(investment.netCostAfterTaxCredit)}</div></div></div><h2>Assunzioni</h2><table><tr><td>Prezzo energia evitato</td><td>${formatNumber(summary.averageVariableEnergyCostPerKwh, 3)} €/kWh</td></tr><tr><td>Degrado / costi operativi</td><td>${formatNumber(project.degradationPct, 2)}% / ${formatCurrency(investment.annualOperatingCost)} annui</td></tr><tr><td>Finanziamento</td><td>${project.paymentMethod === "financed" ? `TAN ${formatNumber(project.tanPct, 2)}% · TAEG ${formatNumber(project.taegPct, 2)}%` : "Pagamento immediato"}</td></tr><tr><td>Profilo orario</td><td>${hourlyMatch ? `PVGIS ${hourlySolar?.year}, autosufficienza ${formatNumber(hourlyMatch.selfSufficiencyPct)}%` : "Non calcolato"}</td></tr></table><h2>Bollette</h2><table><thead><tr><th>Periodo</th><th>kWh</th><th>Totale</th><th>Quota energia</th></tr></thead><tbody>${project.bills.map((bill) => `<tr><td>${esc(bill.startDate)} — ${esc(bill.endDate)}</td><td>${formatNumber(bill.consumptionKwh)}</td><td>${formatCurrency(bill.totalAmount)}</td><td>${formatCurrency(bill.energyAmount || 0)}</td></tr>`).join("") || "<tr><td colspan=4>Nessuna bolletta inserita.</td></tr>"}</tbody></table><footer>Stima orientativa. La simulazione oraria confronta un anno meteorologico PVGIS di riferimento con il profilo caricato; non sostituisce un progetto esecutivo.</footer><script>window.onload=()=>window.print()</script></body></html>`);
     report.document.close();
   }
-  async function importFile(event: ChangeEvent<HTMLInputElement>) {
-    const file = event.target.files?.[0]; if (!file) return;
-    setBusy("import"); setNotice(null);
-    try {
-      let rows: Record<string, unknown>[] = [];
-      if (file.name.toLowerCase().endsWith(".pdf")) {
-        const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
-        const document = await pdfjs.getDocument({ data: new Uint8Array(await file.arrayBuffer()) }).promise;
-        let text = ""; for (let page = 1; page <= document.numPages; page += 1) { const content = await (await document.getPage(page)).getTextContent(); text += ` ${content.items.map((item) => ("str" in item ? item.str : "")).join(" ")}`; }
-        const kwh = text.match(/(\d{1,5}(?:[.,]\d{1,2})?)\s*kWh/i)?.[1];
-        const euros = text.match(/(?:totale\s+da\s+pagare|importo\s+totale|totale)\D{0,20}(\d{1,5}(?:[.,]\d{2})?)/i)?.[1];
-        rows = [{ consumo_kwh: kwh, totale_euro: euros }];
-        setNotice("PDF letto in modo assistito: verifica e completa le date prima di usare l'analisi.");
-      } else if (file.name.toLowerCase().endsWith(".csv")) {
-        rows = csvRows(await file.text());
-      } else {
-        const [firstSheet] = await readXlsxFile(file);
-        const [headerRow = [], ...dataRows] = firstSheet?.data ?? [];
-        const headers = headerRow.map((header: unknown) => String(header ?? "").trim());
-        rows = dataRows.map((dataRow) => Object.fromEntries(headers.map((header, index) => [header, dataRow[index] ?? ""])));
-      }
-      const imported = rows.map((row) => ({
-        id: crypto.randomUUID(), startDate: inputDate(field(row, ["inizio", "start", "dal"])), endDate: inputDate(field(row, ["fine", "end", "al"])),
-        consumptionKwh: numberValue(String(field(row, ["kwh", "consumo"]) ?? "0")), totalAmount: numberValue(String(field(row, ["totale", "importo", "euro", "costo"]) ?? "0")), source: file.name.toLowerCase().endsWith(".pdf") ? "pdf" as const : "csv" as const,
-      })).filter((bill) => bill.consumptionKwh > 0 || bill.totalAmount > 0);
-      if (!imported.length) throw new Error("Nessuna riga importabile: usa colonne con consumo/kWh e totale/importo.");
-      update("bills", [...project.bills, ...imported]);
-    } catch (error) { setNotice(error instanceof Error ? error.message : "Importazione non riuscita."); }
-    finally { event.target.value = ""; setBusy(null); }
-  }
 
-  return <main className="min-h-screen bg-stone-50 text-stone-950"><div className="mx-auto max-w-7xl px-5 py-8 md:px-8">
-    <header className="mb-8 flex flex-col justify-between gap-4 border-b border-stone-200 pb-6 md:flex-row md:items-end"><div><p className="mb-2 text-xs font-semibold tracking-[0.22em] text-stone-500">STUDIO SOLARE</p><h1 className="text-3xl font-semibold tracking-tight">Conviene davvero?</h1><p className="mt-2 max-w-2xl text-sm leading-6 text-stone-600">Analizza le bollette, simula la produzione locale e confronta costo, risparmio e tempi di rientro. I dati restano nel browser.</p></div><Badge variant="outline" className="w-fit">Locale · nessun account</Badge></header>
+  const NumberInput = ({ label, fieldName, unit }: { label: string; fieldName: keyof Project; unit?: string }) => <div><Label htmlFor={String(fieldName)}>{label}</Label><div className="mt-1 flex items-center gap-2"><Input id={String(fieldName)} type="number" step="0.01" value={project[fieldName] as number} onChange={(event) => updateNumber(fieldName, event.target.value)} />{unit && <span className="w-10 text-xs text-muted-foreground">{unit}</span>}</div></div>;
+  const metricRows = [["Energia autoconsumata", `${formatNumber(selfConsumed)} kWh/anno`], ["Energia immessa", `${formatNumber(exported)} kWh/anno`], ["Risparmio annuo stimato", formatCurrency(annualSavings)], ["Costi operativi annui", formatCurrency(investment.annualOperatingCost)], ["Costo netto dopo credito", formatCurrency(investment.netCostAfterTaxCredit)], ["Costo finanziamento", formatCurrency(investment.financingCost)], ["Cassa cumulata a 25 anni", formatCurrency(investment.cashFlowAfterAnalysisYears)]];
+
+  return <main className={dark ? "dark min-h-screen bg-background text-foreground" : "min-h-screen bg-background text-foreground"}><div className="mx-auto max-w-7xl px-5 py-8 md:px-8">
+    <header className="mb-8 flex flex-col justify-between gap-4 border-b pb-6 md:flex-row md:items-end"><div><p className="mb-2 text-xs font-semibold tracking-[.22em] text-muted-foreground">STUDIO SOLARE</p><h1 className="text-3xl font-semibold tracking-tight">Conviene davvero?</h1><p className="mt-2 max-w-2xl text-sm leading-6 text-muted-foreground">Dati locali, modello PVGIS e analisi economica leggibile. Nessun account richiesto.</p></div><div className="flex gap-2"><Badge variant="outline" className="h-9 items-center">Locale · nessun account</Badge><Button aria-label="Cambia tema" variant="outline" size="icon" onClick={() => setDark((value) => !value)}>{dark ? <Sun /> : <Moon />}</Button></div></header>
     {notice && <Alert className="mb-6"><AlertDescription>{notice}</AlertDescription></Alert>}
-    <Tabs defaultValue="progetto"><TabsList className="mb-6 w-full justify-start overflow-auto"><TabsTrigger value="progetto">1. Progetto</TabsTrigger><TabsTrigger value="bollette">2. Bollette</TabsTrigger><TabsTrigger value="analisi">3. Analisi</TabsTrigger></TabsList>
-      <TabsContent value="progetto" className="space-y-6"><div className="grid gap-6 lg:grid-cols-[1.1fr_.9fr]"><Card><CardHeader><CardTitle>Località e impianto</CardTitle><CardDescription>PVGIS calcola una stima della produzione dalle coordinate, potenza, orientamento e perdite.</CardDescription></CardHeader><CardContent className="space-y-5"><div className="flex gap-2"><Input value={locationQuery} onChange={(event) => setLocationQuery(event.target.value)} placeholder="Es. Bologna, Italia" /><Button onClick={geocode} disabled={busy === "location"}>{busy === "location" ? <RefreshCw className="animate-spin" /> : <MapPin />} Cerca</Button></div>{project.locationName && <p className="text-sm text-stone-600">{project.locationName} · {project.latitude?.toFixed(4)}, {project.longitude?.toFixed(4)}</p>}<div className="grid gap-4 sm:grid-cols-2">{[["Potenza impianto", "systemKwp", "kWp"], ["Batteria", "batteryKwh", "kWh"], ["Inclinazione", "tilt", "°"], ["Azimut (sud = 0)", "aspect", "°"], ["Perdite impianto", "lossesPct", "%"], ["Autoconsumo stimato", "selfConsumptionPct", "%"], ["Prezzo energia immessa", "exportPrice", "€/kWh"]].map(([label, key, unit]) => <div key={key}><Label>{label}</Label><div className="mt-1 flex items-center gap-2"><Input type="number" step="0.01" value={project[key as keyof Project] as number} onChange={(event) => update(key as keyof Project, numberValue(event.target.value) as never)} /><span className="w-12 text-xs text-stone-500">{unit}</span></div></div>)}</div><Button className="w-full" onClick={runSolar} disabled={busy === "solar" || project.latitude === null}>{busy === "solar" ? <RefreshCw className="animate-spin" /> : <Sun />} Calcola produzione stimata</Button></CardContent></Card>
-      <Card><CardHeader><CardTitle>Preventivo e pagamento</CardTitle><CardDescription>La detrazione è una simulazione del beneficio fiscale: verifica sempre requisiti, capienza e normativa con un professionista.</CardDescription></CardHeader><CardContent className="space-y-5"><div><Label>Costo preventivo</Label><Input className="mt-1" type="number" value={project.quoteAmount} onChange={(event) => update("quoteAmount", numberValue(event.target.value))} /></div><div className="flex items-center justify-between rounded-lg border border-stone-200 p-3"><div><p className="text-sm font-medium">Detrazione 50% in 10 anni</p><p className="text-xs text-stone-500">Applica 10 quote annuali uguali al costo del preventivo.</p></div><Switch checked={project.useTaxCredit} onCheckedChange={(value) => update("useTaxCredit", value)} /></div><div className="grid grid-cols-2 gap-3"><Button variant={project.paymentMethod === "upfront" ? "default" : "outline"} onClick={() => update("paymentMethod", "upfront")}>Pagamento subito</Button><Button variant={project.paymentMethod === "financed" ? "default" : "outline"} onClick={() => update("paymentMethod", "financed")}>Finanziamento</Button></div>{project.paymentMethod === "financed" && <div className="grid grid-cols-2 gap-4"><div><Label>Rata mensile</Label><Input className="mt-1" type="number" value={project.monthlyPayment} onChange={(event) => update("monthlyPayment", numberValue(event.target.value))} /></div><div><Label>Numero rate</Label><Input className="mt-1" type="number" value={project.installments} onChange={(event) => update("installments", numberValue(event.target.value))} /></div></div>}<div className="rounded-lg bg-stone-100 p-4 text-sm"><div className="flex justify-between"><span>Esborso complessivo</span><strong>{formatCurrency(investment.outOfPocketCost)}</strong></div><div className="mt-2 flex justify-between"><span>Credito annuo simulato</span><strong>{formatCurrency(investment.annualTaxCredit)}</strong></div></div></CardContent></Card></div></TabsContent>
-      <TabsContent value="bollette" className="space-y-6"><Card><CardHeader><CardTitle>Storico bollette</CardTitle><CardDescription>Inserisci periodi e consumo reale. CSV/XLSX: colonne riconosciute includono inizio/fine, consumo/kWh e totale/importo. I PDF vengono estratti in modo assistito e vanno sempre verificati.</CardDescription></CardHeader><CardContent><div className="mb-5 flex flex-wrap gap-3"><Button onClick={addBill}>Aggiungi riga</Button><label className="inline-flex h-9 cursor-pointer items-center justify-center gap-2 rounded-md border border-stone-300 bg-transparent px-3 text-sm font-medium hover:bg-stone-100"><Upload className="size-4" /> Importa CSV, XLSX o PDF<input className="hidden" type="file" accept=".csv,.xlsx,.xls,.pdf" onChange={importFile} /></label>{busy === "import" && <Badge variant="outline"><RefreshCw className="mr-1 size-3 animate-spin" />Importazione</Badge>}</div><div className="overflow-x-auto"><table className="w-full min-w-[760px] text-sm"><thead className="border-b text-left text-stone-500"><tr><th className="pb-2">Dal</th><th className="pb-2">Al</th><th className="pb-2">Consumo kWh</th><th className="pb-2">Totale €</th><th className="pb-2">Fonte</th><th /></tr></thead><tbody>{project.bills.map((bill) => <tr key={bill.id} className="border-b border-stone-100"><td className="py-2 pr-2"><Input type="date" value={bill.startDate} onChange={(event) => editBill(bill.id, "startDate", event.target.value)} /></td><td className="py-2 pr-2"><Input type="date" value={bill.endDate} onChange={(event) => editBill(bill.id, "endDate", event.target.value)} /></td><td className="py-2 pr-2"><Input type="number" value={bill.consumptionKwh} onChange={(event) => editBill(bill.id, "consumptionKwh", event.target.value)} /></td><td className="py-2 pr-2"><Input type="number" step="0.01" value={bill.totalAmount} onChange={(event) => editBill(bill.id, "totalAmount", event.target.value)} /></td><td className="py-2"><Badge variant="outline">{bill.source ?? "manual"}</Badge></td><td className="py-2 text-right"><Button size="icon" variant="ghost" onClick={() => removeBill(bill.id)}><Trash2 /></Button></td></tr>)}{!project.bills.length && <tr><td colSpan={6} className="py-10 text-center text-stone-500">Nessuna bolletta: inserisci una riga o importa un file.</td></tr>}</tbody></table></div></CardContent></Card></TabsContent>
-      <TabsContent value="analisi" className="space-y-6"><div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">{[["Consumo medio", `${formatNumber(summary.averageMonthlyConsumptionKwh)} kWh/mese`], ["Costo medio", `${formatNumber(summary.averageEnergyCostPerKwh, 3)} €/kWh`], ["Produzione simulata", solar ? `${formatNumber(annualProduction)} kWh/anno` : "Da calcolare"], ["Rientro semplice", investment.simplePaybackYears ? `${formatNumber(investment.simplePaybackYears)} anni` : "Dati mancanti"]].map(([label, value]) => <Card key={label}><CardContent className="pt-5"><p className="text-xs uppercase tracking-wider text-stone-500">{label}</p><p className="mt-2 text-xl font-semibold">{value}</p></CardContent></Card>)}</div><div className="grid gap-6 lg:grid-cols-[1.1fr_.9fr]"><Card><CardHeader><CardTitle>Esito economico</CardTitle><CardDescription>Il risparmio combina energia autoconsumata al costo medio rilevato dalle tue bollette e l&apos;energia immessa al valore configurato.</CardDescription></CardHeader><CardContent className="space-y-3 text-sm">{[["Produzione autoconsumata", `${formatNumber(selfConsumed)} kWh/anno`], ["Energia immessa", `${formatNumber(exported)} kWh/anno`], ["Risparmio annuo stimato", formatCurrency(annualSavings)], ["Costo netto dopo credito", formatCurrency(investment.netCostAfterTaxCredit)], ["Costo finanziamento", formatCurrency(investment.financingCost)]].map(([label, value]) => <div className="flex justify-between border-b border-stone-100 pb-3" key={label}><span className="text-stone-600">{label}</span><strong>{value}</strong></div>)}{solar?.monthly?.length ? <div className="pt-2"><p className="mb-2 font-medium">Produzione mensile stimata</p><div className="flex h-28 items-end gap-1">{solar.monthly.map((item) => <div className="flex flex-1 flex-col items-center gap-1" key={item.month}><div className="w-full bg-stone-900" style={{ height: `${Math.max(4, (item.kwh / Math.max(...solar.monthly.map((month) => month.kwh))) * 85)}px` }} /><span className="text-[10px] text-stone-500">{item.month}</span></div>)}</div></div> : null}</CardContent></Card><Card><CardHeader><CardTitle>Correlazione con il meteo</CardTitle><CardDescription>Confronta il consumo giornaliero di ogni bolletta con temperatura, irradiazione e pioggia nel suo stesso periodo.</CardDescription></CardHeader><CardContent className="space-y-4"><Button className="w-full" variant="outline" onClick={exportPdf}><FileDown /> Esporta analisi in PDF</Button><Button className="w-full" variant="outline" onClick={runWeather} disabled={busy === "weather" || project.bills.length < 3 || project.latitude === null}>{busy === "weather" ? <RefreshCw className="animate-spin" /> : <FileSpreadsheet />} Estrai dati meteo del periodo</Button>{weather.length ? <><div className="grid grid-cols-3 gap-2 text-center text-xs"><div className="rounded-lg bg-stone-100 p-3"><p className="text-stone-500">Temperatura</p><strong>{correlation.temperatureCorrelation?.toFixed(2) ?? "n/d"}</strong><p>{correlationLabel(correlation.temperatureCorrelation)}</p></div><div className="rounded-lg bg-stone-100 p-3"><p className="text-stone-500">Sole</p><strong>{correlation.radiationCorrelation?.toFixed(2) ?? "n/d"}</strong><p>{correlationLabel(correlation.radiationCorrelation)}</p></div><div className="rounded-lg bg-stone-100 p-3"><p className="text-stone-500">Pioggia</p><strong>{correlation.precipitationCorrelation?.toFixed(2) ?? "n/d"}</strong><p>{correlationLabel(correlation.precipitationCorrelation)}</p></div></div><p className="text-xs leading-5 text-stone-500">Sono associazioni statistiche, non una prova di causalità. Con meno di 3 periodi completi non si calcola il coefficiente; con 12+ bollette mensili l&apos;interpretazione diventa più utile.</p></> : <p className="text-sm text-stone-500">Inserisci almeno tre periodi completi, poi estrai il meteo storico della località.</p>}</CardContent></Card></div></TabsContent></Tabs>
-    <footer className="mt-10 border-t border-stone-200 pt-5 text-xs leading-5 text-stone-500">Stima orientativa, non parere tecnico, fiscale o finanziario. Verifica preventivo, requisiti della detrazione, tariffe, ombreggiamenti, profilo orario dei consumi e vincoli locali con installatore e professionista abilitato.</footer>
+    <Tabs value={activeTab} onValueChange={(value) => setActiveTab(String(value))}><TabsList className="mb-6 w-full justify-start overflow-auto"><TabsTrigger value="progetto">1. Progetto</TabsTrigger><TabsTrigger value="bollette">2. Dati</TabsTrigger><TabsTrigger value="analisi">3. Analisi</TabsTrigger></TabsList>
+      <TabsContent value="progetto" className="space-y-6"><div className="grid gap-6 lg:grid-cols-[1.1fr_.9fr]"><Card><CardHeader><CardTitle>Località e impianto</CardTitle><CardDescription>PVGIS stima la produzione. Ombre e ostacoli non sono dedotti dall&apos;indirizzo: puoi applicare una correzione prudenziale manuale.</CardDescription></CardHeader><CardContent className="space-y-5"><div className="flex gap-2"><Input aria-label="Località" value={locationQuery} onChange={(event) => setLocationQuery(event.target.value)} placeholder="Es. Bologna, Italia" /><Button onClick={geocode} disabled={busy === "location"}>{busy === "location" ? <RefreshCw className="animate-spin" /> : "Cerca"}</Button></div>{project.locationName && <p className="text-sm text-muted-foreground">{project.locationName} · {project.latitude?.toFixed(4)}, {project.longitude?.toFixed(4)}</p>}<div className="grid gap-4 sm:grid-cols-2"><NumberInput label="Potenza impianto" fieldName="systemKwp" unit="kWp" /><NumberInput label="Batteria" fieldName="batteryKwh" unit="kWh" /><NumberInput label="Inclinazione" fieldName="tilt" unit="°" /><NumberInput label="Azimut (sud = 0)" fieldName="aspect" unit="°" /><NumberInput label="Perdite impianto" fieldName="lossesPct" unit="%" /><NumberInput label="Ombra stimata" fieldName="shadePct" unit="%" /><NumberInput label="Autoconsumo manuale" fieldName="selfConsumptionPct" unit="%" /><NumberInput label="Prezzo energia immessa" fieldName="exportPrice" unit="€/kWh" /></div><Button className="w-full" onClick={runSolar} disabled={busy === "solar" || project.latitude === null}>{busy === "solar" ? <RefreshCw className="animate-spin" /> : <Sun />} Calcola produzione annua</Button></CardContent></Card>
+      <Card><CardHeader><CardTitle>Preventivo e costi reali</CardTitle><CardDescription>La detrazione resta una simulazione. Degrado, manutenzione e assicurazione incidono sul rientro dinamico.</CardDescription></CardHeader><CardContent className="space-y-5"><NumberInput label="Costo preventivo" fieldName="quoteAmount" /><div className="flex items-center justify-between rounded-lg border p-3"><div><p className="text-sm font-medium">Detrazione 50% in 10 anni</p><p className="text-xs text-muted-foreground">Verifica requisiti e capienza fiscale con un professionista.</p></div><Switch checked={project.useTaxCredit} onCheckedChange={(value) => update("useTaxCredit", value)} /></div><div className="grid grid-cols-2 gap-3"><Button variant={project.paymentMethod === "upfront" ? "default" : "outline"} onClick={() => update("paymentMethod", "upfront")}>Pagamento subito</Button><Button variant={project.paymentMethod === "financed" ? "default" : "outline"} onClick={() => update("paymentMethod", "financed")}>Finanziamento</Button></div>{project.paymentMethod === "financed" && <div className="grid gap-4 sm:grid-cols-2"><NumberInput label="Anticipo" fieldName="downPayment" /><NumberInput label="Rata mensile" fieldName="monthlyPayment" /><NumberInput label="Numero rate" fieldName="installments" /><NumberInput label="TAN" fieldName="tanPct" unit="%" /><NumberInput label="TAEG" fieldName="taegPct" unit="%" /></div>}<div className="grid gap-4 sm:grid-cols-3"><NumberInput label="Degrado annuo" fieldName="degradationPct" unit="%" /><NumberInput label="Manutenzione annua" fieldName="maintenanceAnnual" /><NumberInput label="Assicurazione annua" fieldName="insuranceAnnual" /></div><div className="rounded-lg bg-muted p-4 text-sm"><div className="flex justify-between"><span>Esborso complessivo</span><strong>{formatCurrency(investment.outOfPocketCost)}</strong></div>{project.paymentMethod === "financed" && <div className="mt-2 flex justify-between"><span>Rata riferimento TAN</span><strong>{formatCurrency(investment.referenceMonthlyPayment)}</strong></div>}<div className="mt-2 flex justify-between"><span>Credito annuo simulato</span><strong>{formatCurrency(investment.annualTaxCredit)}</strong></div></div></CardContent></Card></div></TabsContent>
+      <TabsContent value="bollette" className="space-y-6"><Card><CardHeader><CardTitle>Bollette</CardTitle><CardDescription>La quota energia è il prezzo evitabile dall&apos;autoconsumo; i costi fissi restano esclusi. Se manca, viene usato il totale fattura come stima.</CardDescription></CardHeader><CardContent><div className="mb-5 flex flex-wrap gap-3"><Button onClick={addBill}>Aggiungi riga</Button><label className="inline-flex h-9 cursor-pointer items-center gap-2 rounded-md border bg-background px-3 text-sm font-medium hover:bg-muted"><Upload className="size-4" /> Importa bollette<input className="hidden" type="file" accept=".csv,.xlsx,.xls,.pdf" onChange={importBills} /></label>{busy === "bills" && <Badge variant="outline"><RefreshCw className="mr-1 size-3 animate-spin" />Importazione</Badge>}</div><div className="overflow-x-auto"><table className="w-full min-w-[960px] text-sm"><thead className="border-b text-left text-muted-foreground"><tr><th className="pb-2">Dal</th><th className="pb-2">Al</th><th className="pb-2">Consumo kWh</th><th className="pb-2">Totale €</th><th className="pb-2">Quota energia €</th><th className="pb-2">Fissi €</th><th className="pb-2">Fonte</th><th /></tr></thead><tbody>{project.bills.map((bill) => <tr key={bill.id} className="border-b"><td className="py-2 pr-2"><Input aria-label="Data inizio" type="date" value={bill.startDate} onChange={(event) => editBill(bill.id, "startDate", event.target.value)} /></td><td className="py-2 pr-2"><Input aria-label="Data fine" type="date" value={bill.endDate} onChange={(event) => editBill(bill.id, "endDate", event.target.value)} /></td><td className="py-2 pr-2"><Input aria-label="Consumo kWh" type="number" value={bill.consumptionKwh} onChange={(event) => editBill(bill.id, "consumptionKwh", event.target.value)} /></td><td className="py-2 pr-2"><Input aria-label="Totale euro" type="number" step="0.01" value={bill.totalAmount} onChange={(event) => editBill(bill.id, "totalAmount", event.target.value)} /></td><td className="py-2 pr-2"><Input aria-label="Quota energia euro" type="number" step="0.01" value={bill.energyAmount ?? 0} onChange={(event) => editBill(bill.id, "energyAmount", event.target.value)} /></td><td className="py-2 pr-2"><Input aria-label="Costi fissi euro" type="number" step="0.01" value={bill.fixedAmount ?? 0} onChange={(event) => editBill(bill.id, "fixedAmount", event.target.value)} /></td><td className="py-2"><Badge variant="outline">{bill.source ?? "manuale"}</Badge></td><td><Button aria-label="Elimina bolletta" size="icon" variant="ghost" onClick={() => removeBill(bill.id)}><Trash2 /></Button></td></tr>)}{!project.bills.length && <tr><td colSpan={8} className="py-8 text-center text-muted-foreground">Nessuna bolletta ancora.</td></tr>}</tbody></table></div></CardContent></Card>
+      <Card><CardHeader><CardTitle>Profilo orario del contatore</CardTitle><CardDescription>CSV/XLSX con data/ora e kWh. Usa al massimo un anno completo di dati: l&apos;app lo confronta con una serie oraria PVGIS di riferimento.</CardDescription></CardHeader><CardContent className="flex flex-col justify-between gap-4 sm:flex-row sm:items-center"><div><p className="text-2xl font-semibold">{formatNumber(project.hourlyLoad.length, 0)}</p><p className="text-sm text-muted-foreground">letture importate{hourlySolar ? ` · profilo PVGIS ${hourlySolar.year} pronto` : ""}</p></div><div className="flex flex-wrap gap-3"><label className="inline-flex h-9 cursor-pointer items-center gap-2 rounded-md border bg-background px-3 text-sm font-medium hover:bg-muted"><Upload className="size-4" /> Importa consumi orari<input className="hidden" type="file" accept=".csv,.xlsx,.xls" onChange={importHourlyLoad} /></label><Button variant="outline" onClick={runHourlyProfile} disabled={busy === "hourly" || !project.hourlyLoad.length || project.latitude === null}>{busy === "hourly" ? <RefreshCw className="animate-spin" /> : <Sun />} Simula autoconsumo reale</Button></div></CardContent></Card>
+      <Card><CardHeader><CardTitle>Correlazione consumi e meteo</CardTitle><CardDescription>Allinea ogni bolletta al meteo osservato nel suo periodo.</CardDescription></CardHeader><CardContent><Button onClick={runWeather} disabled={busy === "weather"}>{busy === "weather" ? <RefreshCw className="animate-spin" /> : "Calcola correlazioni"}</Button></CardContent></Card></TabsContent>
+      <TabsContent value="analisi" className="space-y-6"><div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">{[["Consumo medio", `${formatNumber(summary.averageMonthlyConsumptionKwh)} kWh/mese`], ["Quota energia", `${formatNumber(summary.averageVariableEnergyCostPerKwh, 3)} €/kWh`], ["Produzione simulata", solar ? `${formatNumber(annualProduction)} kWh/anno` : "Da calcolare"], ["Rientro dinamico", investment.dynamicPaybackYears ? `${formatNumber(investment.dynamicPaybackYears)} anni` : "Oltre 25 anni"]].map(([label, value]) => <Card key={label}><CardContent className="pt-5"><p className="text-xs uppercase tracking-wider text-muted-foreground">{label}</p><p className="mt-2 text-xl font-semibold">{value}</p></CardContent></Card>)}</div><div className="grid gap-6 lg:grid-cols-[1.1fr_.9fr]"><Card><CardHeader><CardTitle>Esito economico</CardTitle><CardDescription>{hourlyMatch ? "Il calcolo usa il profilo orario importato e PVGIS." : "Il calcolo usa l'autoconsumo manuale; importa i dati orari per aumentare l'accuratezza."}</CardDescription></CardHeader><CardContent className="space-y-3 text-sm">{metricRows.map(([label, value]) => <div className="flex justify-between gap-4 border-b pb-3" key={label}><span className="text-muted-foreground">{label}</span><strong className="text-right">{value}</strong></div>)}{hourlyMatch && <div className="rounded-lg bg-muted p-3"><p className="font-medium">Profilo orario + batteria</p><p className="mt-1 text-muted-foreground">Autosufficienza {formatNumber(hourlyMatch.selfSufficiencyPct)}% · autoconsumo {formatNumber(hourlyMatch.selfConsumptionPct)}% · prelievo rete {formatNumber(hourlyMatch.gridImported)} kWh.</p></div>}{summary.usesEstimatedVariablePrice && <p className="rounded-lg border p-3 text-muted-foreground">Per alcune bollette manca la quota energia: il prezzo evitato può essere sovrastimato.</p>}</CardContent></Card><Card><CardHeader><CardTitle>Produzione e clima</CardTitle><CardDescription>La correlazione misura associazioni, non causalità.</CardDescription></CardHeader><CardContent className="space-y-5">{solar?.monthly?.length ? <div><p className="mb-2 text-sm font-medium">Produzione mensile</p><div className="flex h-28 items-end gap-1" aria-label="Grafico produzione mensile">{solar.monthly.map((item) => <div className="flex flex-1 flex-col items-center gap-1" key={item.month}><div className="w-full rounded-sm bg-foreground" style={{ height: `${Math.max(4, item.kwh / Math.max(...solar.monthly.map((month) => month.kwh)) * 85)}px` }} /><span className="text-[10px] text-muted-foreground">{item.month}</span></div>)}</div></div> : <p className="text-sm text-muted-foreground">Calcola la produzione per visualizzare il profilo mensile.</p>}<div className="space-y-2 text-sm">{[["Temperatura", correlation.temperatureCorrelation], ["Radiazione", correlation.radiationCorrelation], ["Precipitazioni", correlation.precipitationCorrelation]].map(([label, value]) => <div className="flex justify-between border-b pb-2" key={label as string}><span>{label as string}</span><strong>{typeof value === "number" ? `${value.toFixed(2)} · ${correlationLabel(value)}` : "Dati insufficienti"}</strong></div>)}</div></CardContent></Card></div><Button className="w-full" variant="outline" onClick={exportPdf}><FileDown /> Esporta analisi in PDF</Button></TabsContent>
+    </Tabs><footer className="mt-10 border-t pt-5 text-xs leading-5 text-muted-foreground">Stima orientativa, non parere tecnico, fiscale o finanziario. Il profilo orario PVGIS è un riferimento meteorologico e non sostituisce un sopralluogo su ombre, tetto e vincoli locali.</footer>
   </div></main>;
 }
