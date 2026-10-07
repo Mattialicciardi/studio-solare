@@ -3,7 +3,7 @@ import {
   buildInvestmentSummary,
   calculateMonthlyPayment,
   buildFinancingPlan,
-  deriveRoofEstimate,
+  estimateWithoutData,
   pearsonCorrelation,
   simulateHourlyAutoconsumption,
   summarizeBills,
@@ -118,26 +118,12 @@ describe("pearsonCorrelation", () => {
   });
 });
 
-describe("deriveRoofEstimate", () => {
-  it("derives a south-facing roof plane from a north-up screenshot", () => {
-    const estimate = deriveRoofEstimate({
-      scaleStart: { x: 0, y: 0 },
-      scaleEnd: { x: 10, y: 0 },
-      scaleMeters: 10,
-      northStart: { x: 50, y: 50 },
-      northEnd: { x: 50, y: 40 },
-      roofPolygon: [{ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 10, y: 10 }, { x: 0, y: 10 }],
-      fallStart: { x: 50, y: 50 },
-      fallEnd: { x: 50, y: 60 },
-      tilt: 30,
-      usableRoofPct: 75,
-      panelDensityWpM2: 200,
-    });
-    expect(estimate).not.toBeNull();
-    expect(estimate?.footprintAreaM2).toBeCloseTo(100, 6);
-    expect(estimate?.roofPlaneAreaM2).toBeCloseTo(115.47, 2);
-    expect(estimate?.azimuthDegrees).toBe(180);
-    expect(estimate?.pvgisAspect).toBe(0);
-    expect(estimate?.suggestedKwp).toBeCloseTo(17.32, 2);
+describe("estimateWithoutData", () => {
+  it("returns a transparent production range instead of zero when bills and PVGIS are missing", () => {
+    const result = estimateWithoutData(6);
+    expect(result.lowProductionKwh).toBe(5_700);
+    expect(result.baseProductionKwh).toBe(6_600);
+    expect(result.highProductionKwh).toBe(7_500);
+    expect(result.assumption).toContain("1.100");
   });
 });

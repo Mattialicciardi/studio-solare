@@ -3,12 +3,6 @@ import { expect, test, type Page } from "@playwright/test";
 
 const fixture = (name: string) => path.join(process.cwd(), "tests", "fixtures", name);
 
-async function clickRoofStage(page: Page, x: number, y: number) {
-  const stage = page.getByTestId("roof-map-stage");
-  const box = await stage.boundingBox();
-  if (!box) throw new Error("Area di tracciamento non disponibile");
-  await stage.click({ position: { x: box.width * x, y: box.height * y } });
-}
 
 test("regression: i campi numerici mantengono focus durante la digitazione", async ({ page }) => {
   await page.goto("/");
@@ -36,6 +30,7 @@ test("il percorso di simulazione rende visibili prerequisiti e risultati", async
   await page.goto("/");
   const status = page.getByLabel("Stato del percorso");
   await expect(status).toContainText("Località da impostare");
+  await expect(status).toContainText("Fascia iniziale pronta");
   await page.getByLabel("Località").fill("Bologna, Italia");
   const geocode = page.waitForResponse((response) => response.url().includes("/api/geocode?") && response.status() === 200);
   await page.getByRole("button", { name: "Cerca" }).click();
@@ -62,31 +57,11 @@ test("tutti i campi di progetto, finanza e rilievo sono modificabili", async ({ 
   await expect(page.getByLabel("Inclinazione")).toBeVisible();
   for (const [label, value] of [
     ["Inclinazione", "27"], ["Azimut (sud = 0)", "-15"], ["Perdite impianto", "12"], ["Ombra stimata", "8"],
-    ["Autoconsumo manuale", "61"], ["Prezzo energia immessa", "0.11"], ["Area effettivamente utilizzabile", "78"], ["Densità pannelli", "205"],
+    ["Autoconsumo manuale", "61"], ["Prezzo energia immessa", "0.11"],
   ]) {
     await page.getByLabel(label).fill(value);
     await expect(page.getByLabel(label)).toHaveValue(value);
   }
-
-  await page.getByLabel("Screenshot mappa o planimetria").setInputFiles(fixture("roof-map.svg"));
-  await expect(page.getByTestId("roof-map-stage")).toBeVisible();
-  await page.getByLabel("Metri indicati dalla barra di scala").fill("10");
-  await page.getByRole("button", { name: /1\. Barra di scala/ }).click();
-  await clickRoofStage(page, 0.1, 0.1);
-  await clickRoofStage(page, 0.35, 0.1);
-  await page.getByRole("button", { name: /2\. Nord/ }).click();
-  await clickRoofStage(page, 0.7, 0.55);
-  await clickRoofStage(page, 0.7, 0.25);
-  await page.getByRole("button", { name: /3\. Contorno falda/ }).click();
-  for (const point of [{ x: 0.25, y: 0.3 }, { x: 0.6, y: 0.3 }, { x: 0.6, y: 0.7 }, { x: 0.25, y: 0.7 }]) {
-    await clickRoofStage(page, point.x, point.y);
-  }
-  await page.getByRole("button", { name: /4\. Caduta falda/ }).click();
-  await clickRoofStage(page, 0.45, 0.38);
-  await clickRoofStage(page, 0.45, 0.64);
-  await expect(page.getByText("Stima della falda selezionata")).toBeVisible();
-  await page.getByRole("button", { name: "Usa azimut e potenza stimata" }).click();
-  await expect(page.getByLabel("Azimut (sud = 0)")).toHaveValue("0");
 
   await page.getByLabel("Costo preventivo").fill("14000");
   await expect(page.getByLabel("Costo preventivo")).toHaveValue("14000");
@@ -154,7 +129,7 @@ test("audit: ogni campo numerico visibile si cancella e si riscrive senza perder
   await page.getByRole("button", { name: "Finanziamento" }).click();
   const projectInputs = page.locator('input[type="number"]:visible');
   const projectCount = await projectInputs.count();
-  expect(projectCount).toBeGreaterThan(15);
+  expect(projectCount).toBeGreaterThan(10);
   for (let index = 0; index < projectCount; index += 1) await rewrite(projectInputs.nth(index));
 
   await page.getByRole("tab", { name: "2. Dati" }).click();
