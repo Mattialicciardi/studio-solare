@@ -33,8 +33,79 @@ export type HourlyEnergyRecord = {
   kwh: number;
 };
 
+export type MapPoint = { x: number; y: number };
+
+export type RoofEstimate = {
+  footprintAreaM2: number;
+  roofPlaneAreaM2: number;
+  usableAreaM2: number;
+  suggestedKwp: number;
+  azimuthDegrees: number;
+  pvgisAspect: number;
+};
+
+export type RoofEstimateInput = {
+  scaleStart?: MapPoint;
+  scaleEnd?: MapPoint;
+  scaleMeters: number;
+  northStart?: MapPoint;
+  northEnd?: MapPoint;
+  roofPolygon: MapPoint[];
+  fallStart?: MapPoint;
+  fallEnd?: MapPoint;
+  tilt: number;
+  usableRoofPct: number;
+  panelDensityWpM2: number;
+};
+
 function money(value: number | undefined) {
   return Number.isFinite(value) ? Math.max(0, value ?? 0) : 0;
+}
+
+function pointDistance(first: MapPoint, second: MapPoint) {
+  return Math.hypot(second.x - first.x, second.y - first.y);
+}
+
+function polygonArea(points: MapPoint[]) {
+  return Math.abs(points.reduce((area, point, index) => {
+    const next = points[(index + 1) % points.length];
+    return area + point.x * next.y - next.x * point.y;
+  }, 0) / 2);
+}
+
+function screenBearing(start: MapPoint, end: MapPoint) {
+  return ((Math.atan2(end.x - start.x, -(end.y - start.y)) * 180) / Math.PI + 360) % 360;
+}
+
+function normalizeSignedAngle(value: number) {
+  return ((value + 180) % 360 + 360) % 360 - 180;
+}
+
+export function deriveRoofEstimate(input: RoofEstimateInput): RoofEstimate | null {
+  const { scaleStart, scaleEnd, northStart, northEnd, fallStart, fallEnd } = input;
+  if (!scaleStart || !scaleEnd || !northStart || !northEnd || !fallStart || !fallEnd || input.roofPolygon.length < 3) return null;
+  const scaleLength = pointDistance(scaleStart, scaleEnd);
+  const northLength = pointDistance(northStart, northEnd);
+  const fallLength = pointDistance(fallStart, fallEnd);
+  const footprintPixels = polygonArea(input.roofPolygon);
+  if (!scaleLength || !northLength || !fallLength || !footprintPixels || !Number.isFinite(input.scaleMeters) || input.scaleMeters <= 0) return null;
+  const metersPerUnit = input.scaleMeters / scaleLength;
+  const footprintAreaM2 = footprintPixels * metersPerUnit ** 2;
+  const tiltRadians = Math.max(0, Math.min(75, input.tilt || 0)) * Math.PI / 180;
+  const roofPlaneAreaM2 = footprintAreaM2 / Math.cos(tiltRadians);
+  const usableAreaM2 = roofPlaneAreaM2 * Math.max(0, Math.min(100, input.usableRoofPct)) / 100;
+  const suggestedKwp = usableAreaM2 * Math.max(0, input.panelDensityWpM2) / 1000;
+  const northBearing = screenBearing(northStart, northEnd);
+  const fallBearing = screenBearing(fallStart, fallEnd);
+  const azimuthDegrees = (fallBearing - northBearing + 360) % 360;
+  return {
+    footprintAreaM2,
+    roofPlaneAreaM2,
+    usableAreaM2,
+    suggestedKwp,
+    azimuthDegrees,
+    pvgisAspect: normalizeSignedAngle(azimuthDegrees - 180),
+  };
 }
 
 export function calculateMonthlyPayment(principal: number, tanPct: number, installments: number) {
