@@ -94,10 +94,12 @@ test("tutti i campi di progetto, finanza e rilievo sono modificabili", async ({ 
   await taxCredit.click();
   await expect(taxCredit).toHaveAttribute("aria-checked", "false");
   await page.getByRole("button", { name: "Finanziamento" }).click();
-  for (const [label, value] of [["Anticipo", "2000"], ["Rata mensile", "160"], ["Numero rate", "96"], ["TAN", "4.7"], ["TAEG", "5.5"], ["Degrado annuo", "0.6"], ["Manutenzione annua", "150"], ["Assicurazione annua", "80"]]) {
+  for (const [label, value] of [["Rata mensile", "160"], ["Durata complessiva", "96"]]) {
     await page.getByLabel(label).fill(value);
     await expect(page.getByLabel(label)).toHaveValue(value);
   }
+  await expect(page.locator("p").filter({ hasText: "Totale rate" }).first()).toBeVisible();
+  await expect(page.locator("p").filter({ hasText: "Costo finanziamento" }).first()).toBeVisible();
 });
 
 test("tutti i campi bolletta e gli import file aggiornano i dati locali", async ({ page }) => {

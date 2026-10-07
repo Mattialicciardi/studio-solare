@@ -21,7 +21,9 @@ const pointLabel = (point?: MapPoint) => point ? `${formatNumber(point.x, 1)}%, 
 
 export function RoofPlanner({ tilt, usableRoofPct, panelDensityWpM2, onApply }: RoofPlannerProps) {
   const stageRef = useRef<HTMLDivElement>(null);
+  const imageRef = useRef<HTMLImageElement>(null);
   const [image, setImage] = useState<string | null>(null);
+  const [imageSize, setImageSize] = useState<{ width: number; height: number } | null>(null);
   const [mode, setMode] = useState<Mode>(null);
   const [scale, setScale] = useState<Pair>({});
   const [north, setNorth] = useState<Pair>({});
@@ -54,24 +56,26 @@ export function RoofPlanner({ tilt, usableRoofPct, panelDensityWpM2, onApply }: 
 
   function handleImage(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
-    if (!file) return;
+    if (!file || !file.type.startsWith("image/")) return;
     const reader = new FileReader();
-    reader.addEventListener("load", () => setImage(String(reader.result)));
+    reader.addEventListener("load", () => { setImage(String(reader.result)); setImageSize(null); setMode(null); setScale({}); setNorth({}); setFall({}); setRoof([]); });
     reader.readAsDataURL(file);
     event.target.value = "";
   }
 
   function addPoint(event: MouseEvent<HTMLDivElement>) {
     if (!mode || !stageRef.current) return;
-    const rect = stageRef.current.getBoundingClientRect();
+    const target = imageRef.current ?? stageRef.current;
+    const rect = target.getBoundingClientRect();
+    if (!rect.width || !rect.height) return;
     const point = { x: ((event.clientX - rect.left) / rect.width) * 100, y: ((event.clientY - rect.top) / rect.height) * 100 };
-    if (mode === "scale") setScale((current) => current.start ? { ...current, end: point } : { start: point });
-    if (mode === "north") setNorth((current) => current.start ? { ...current, end: point } : { start: point });
-    if (mode === "fall") setFall((current) => current.start ? { ...current, end: point } : { start: point });
+    if (mode === "scale") setScale((current) => { if (current.start) { setMode(null); return { ...current, end: point }; } return { start: point }; });
+    if (mode === "north") setNorth((current) => { if (current.start) { setMode(null); return { ...current, end: point }; } return { start: point }; });
+    if (mode === "fall") setFall((current) => { if (current.start) { setMode(null); return { ...current, end: point }; } return { start: point }; });
     if (mode === "roof") setRoof((current) => [...current, point]);
   }
 
-  const reset = () => { setImage(null); setMode(null); setScale({}); setNorth({}); setFall({}); setRoof([]); };
+  const reset = () => { setImage(null); setImageSize(null); setMode(null); setScale({}); setNorth({}); setFall({}); setRoof([]); setScaleMetersDraft("10"); setScaleMeters(10); };
 
   return <div className="space-y-4">
     <div className="rounded-lg border bg-muted/30 p-4 text-sm leading-6 text-muted-foreground">
@@ -91,10 +95,10 @@ export function RoofPlanner({ tilt, usableRoofPct, panelDensityWpM2, onApply }: 
         <Button type="button" size="sm" variant="ghost" onClick={reset}><RotateCcw />Reimposta</Button>
       </div>
       <p className="text-xs text-muted-foreground">{mode === "scale" ? "Clicca i due estremi della barra di scala." : mode === "north" ? "Clicca il centro della bussola e poi la punta rossa del Nord." : mode === "roof" ? "Clicca i vertici della singola falda; almeno tre punti." : mode === "fall" ? "Clicca dal colmo verso la gronda della falda selezionata." : "Segui i quattro passaggi per ottenere una stima ripetibile."}</p>
-      <div ref={stageRef} data-testid="roof-map-stage" onClick={addPoint} className="relative min-h-64 cursor-crosshair overflow-hidden rounded-lg border bg-background" role="application" aria-label="Area di tracciamento del tetto">
+      <div ref={stageRef} data-testid="roof-map-stage" onClick={addPoint} style={imageSize ? { aspectRatio: `${imageSize.width} / ${imageSize.height}` } : undefined} className="relative min-h-64 cursor-crosshair overflow-hidden rounded-lg border bg-background" role="application" aria-label="Area di tracciamento del tetto">
         {/* The user-provided image remains client-only and is intentionally not optimized or persisted. */}
         {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img src={image} alt="Screenshot selezionato per il rilievo del tetto" className="block max-h-[520px] w-full object-contain" draggable={false} />
+        <img ref={imageRef} src={image} alt="Screenshot selezionato per il rilievo del tetto" className="block h-full w-full object-contain" draggable={false} onLoad={(event) => setImageSize({ width: event.currentTarget.naturalWidth, height: event.currentTarget.naturalHeight })} />
         <svg className="pointer-events-none absolute inset-0 h-full w-full" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
           {roof.length >= 2 && <polygon points={roof.map((point) => `${point.x},${point.y}`).join(" ")} fill="currentColor" fillOpacity=".12" stroke="currentColor" strokeWidth=".45" />}
           {roof.map((point, index) => <circle key={`${point.x}-${point.y}-${index}`} cx={point.x} cy={point.y} r=".8" fill="currentColor" />)}

@@ -16,6 +16,13 @@ export type InvestmentInput = {
   analysisYears?: number;
 };
 
+export type FinancingPlanInput = {
+  quoteAmount: number;
+  monthlyPayment: number;
+  installments: number;
+  annualSavings?: number;
+};
+
 export type BillRecord = {
   id: string;
   startDate: string;
@@ -117,6 +124,28 @@ export function calculateMonthlyPayment(principal: number, tanPct: number, insta
   return (amount * monthlyRate) / (1 - (1 + monthlyRate) ** -months);
 }
 
+export function buildFinancingPlan(input: FinancingPlanInput) {
+  const quoteAmount = money(input.quoteAmount);
+  const monthlyPayment = money(input.monthlyPayment);
+  const installments = Math.max(0, Math.round(input.installments));
+  const totalPaid = monthlyPayment * installments;
+  const financingCost = Math.max(0, totalPaid - quoteAmount);
+  const effectivePremiumPct = quoteAmount > 0 ? (financingCost / quoteAmount) * 100 : 0;
+  const annualPayment = monthlyPayment * 12;
+  const annualSavings = money(input.annualSavings);
+  return {
+    quoteAmount,
+    monthlyPayment,
+    installments,
+    durationYears: installments / 12,
+    totalPaid,
+    financingCost,
+    effectivePremiumPct,
+    annualPayment,
+    coverageRatio: annualPayment > 0 ? annualSavings / annualPayment : null,
+  };
+}
+
 export function buildInvestmentSummary(input: InvestmentInput) {
   const quoteAmount = money(input.quoteAmount);
   const downPayment = input.paymentMethod === "financed" ? Math.min(quoteAmount, money(input.downPayment)) : quoteAmount;
@@ -150,6 +179,10 @@ export function buildInvestmentSummary(input: InvestmentInput) {
     return { year, savingsAfterDegradation, taxCredit, operatingCost: annualOperatingCost, netCashFlow, cumulativeCashFlow };
   });
 
+  const totalBenefits = annualCashFlows.reduce((sum, item) => sum + item.savingsAfterDegradation + item.taxCredit, 0);
+  const totalOperatingCosts = annualCashFlows.reduce((sum, item) => sum + item.operatingCost, 0);
+  const netProfitAfterAnalysisYears = cumulativeCashFlow;
+  const roiPct = outOfPocketCost > 0 ? (netProfitAfterAnalysisYears / outOfPocketCost) * 100 : 0;
   return {
     outOfPocketCost,
     downPayment,
@@ -159,6 +192,10 @@ export function buildInvestmentSummary(input: InvestmentInput) {
     annualTaxCredit,
     netCostAfterTaxCredit,
     annualOperatingCost,
+    totalBenefits,
+    totalOperatingCosts,
+    netProfitAfterAnalysisYears,
+    roiPct,
     referenceMonthlyPayment: calculateMonthlyPayment(financedPrincipal, money(input.tanPct), installments),
     simplePaybackYears: annualSavings > 0 ? netCostAfterTaxCredit / annualSavings : null,
     dynamicPaybackYears,

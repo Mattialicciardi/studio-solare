@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildInvestmentSummary,
   calculateMonthlyPayment,
+  buildFinancingPlan,
   deriveRoofEstimate,
   pearsonCorrelation,
   simulateHourlyAutoconsumption,
@@ -10,6 +11,14 @@ import {
 } from "./analysis";
 
 describe("buildInvestmentSummary", () => {
+  it("derives total instalment cost and financing premium from only payment and months", () => {
+    const result = buildFinancingPlan({ quoteAmount: 10_000, monthlyPayment: 180, installments: 60 });
+    expect(result.totalPaid).toBe(10_800);
+    expect(result.financingCost).toBe(800);
+    expect(result.monthlyPayment).toBe(180);
+    expect(result.installments).toBe(60);
+  });
+
   it("models the 50% tax credit over ten years on the eligible quote", () => {
     const result = buildInvestmentSummary({
       quoteAmount: 12_000,
@@ -24,6 +33,8 @@ describe("buildInvestmentSummary", () => {
     expect(result.annualTaxCredit).toBe(600);
     expect(result.netCostAfterTaxCredit).toBe(6_000);
     expect(result.simplePaybackYears).toBe(4);
+    expect(result.netProfitAfterAnalysisYears).toBeGreaterThan(0);
+    expect(result.roiPct).toBeGreaterThan(0);
   });
 
   it("models real annual operating costs and production degradation", () => {
