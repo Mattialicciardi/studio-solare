@@ -10,6 +10,16 @@ async function clickRoofStage(page: Page, x: number, y: number) {
   await stage.click({ position: { x: box.width * x, y: box.height * y } });
 }
 
+test("regression: i campi numerici mantengono focus durante la digitazione", async ({ page }) => {
+  await page.goto("/");
+  const input = page.getByLabel("Potenza impianto");
+  await input.click();
+  await input.press("Meta+A");
+  await input.pressSequentially("5.8");
+  await expect(input).toHaveValue("5.8");
+  await expect(input).toBeFocused();
+});
+
 test("tutti i campi di progetto, finanza e rilievo sono modificabili", async ({ page }) => {
   await page.goto("/");
   await expect(page.getByRole("heading", { name: "Conviene davvero?" })).toBeVisible();
